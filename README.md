@@ -10,7 +10,13 @@ Each ping is one message (`"hi"`) to the cheapest model (Haiku) — minimal toke
 
 ## Quick Start
 
+You need macOS, the Xcode command line tools (`xcode-select --install`) and Claude Code installed and logged in.
+
 ```bash
+# 0. Clone
+git clone https://github.com/adrians5j/claude-autowake.git
+cd claude-autowake
+
 # 1. Edit config.sh to set your preferred schedule
 vim config.sh
 
@@ -22,7 +28,14 @@ vim config.sh
 
 # 4. Check status
 ./status.sh
+
+# 5. Optional: menu bar app with usage and token stats, starts at login
+./menubar/build.sh --install
 ```
+
+If you change `config.sh` later, run `./install.sh` again. The schedule is baked into the launchd plist at install time, so edits don't apply until you reinstall. The installer will ask whether to replace the existing wake schedule; say yes.
+
+This is a fork of [1mshy/claude-autowake](https://github.com/1mshy/claude-autowake) by Luca Lapenna, with the menu bar app added.
 
 ## Configuration
 
@@ -71,10 +84,30 @@ launchctl list | grep autowake
 pmset -g sched
 ```
 
+## Menu bar app
+
+`menubar/` holds a small native menu bar app (AutowakeBar). The menu bar shows your current 5-hour usage and the time until it resets, for example `12% · 2h 31m`, or `idle` when no window is active. The dropdown shows:
+
+- 5-hour and 7-day usage with a bar and reset time
+- whether the ping and caffeinate agents are loaded
+- the next scheduled ping and the result of the last one
+- actions: token stats, ping now, open the last log, open the logs folder, refresh
+
+"Token stats…" (⌘T) opens a window that breaks down where your tokens went, for the current 5-hour window, today, the last 24 hours or the last 7 days. It shows fresh input, cache writes, cache reads and output, a chart over time, totals per workspace and your biggest sessions by name. The numbers come from Claude Code's own transcripts in `~/.claude/projects`, so nothing leaves your machine. "Weighted" counts tokens at their price ratio to fresh input: cache reads 0.1x, cache writes 1.25x, output 5x. That makes it a better guide to what eats your limit than raw token counts, which cache reads dominate. The first scan after launch takes a few seconds; after that the window refreshes every minute.
+
+```bash
+./menubar/build.sh              # build menubar/build/AutowakeBar.app
+./menubar/build.sh --install    # install to ~/Applications and start at login
+./menubar/build.sh --uninstall  # remove it
+```
+
+Usage numbers come from the same endpoint Claude Code's `/usage` reads, authenticated with the Claude Code login stored in your Keychain. If the token has expired, run `claude` once to refresh it. Usage refreshes every 5 minutes and when you open the menu; local state refreshes every 30 seconds. Requires Xcode command line tools (`swiftc`).
+
 ## Uninstall
 
 ```bash
 ./uninstall.sh
+./menubar/build.sh --uninstall   # if you installed the menu bar app
 ```
 
 
