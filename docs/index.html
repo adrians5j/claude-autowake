@@ -1,0 +1,785 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Autowake: your Claude limit resets before you do</title>
+<meta name="description" content="A macOS launchd job that says good morning to Claude Haiku at 6am, so your 5-hour usage window resets at 11 instead of 2pm. Plus a menu bar app that shows where your tokens went.">
+<meta property="og:title" content="Autowake">
+<meta property="og:description" content="Your Claude limit resets before you even wake up. Vibe-coded, one prompt, zero regrets.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='20' r='9' fill='%23ff9a3c'/%3E%3Crect x='0' y='20' width='32' height='12' fill='%230b0d1a'/%3E%3Crect x='3' y='21' width='26' height='2' rx='1' fill='%23ff5f6d'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --night: #07081a;
+  --night-2: #0e1030;
+  --ink: #f4f1ea;
+  --muted: #a3a6c4;
+  --faint: #5d6189;
+  --line: rgba(255,255,255,.09);
+  --sun: #ffb347;
+  --sun-2: #ff7a45;
+  --rose: #ff5f8f;
+  --violet: #8b6cff;
+  --blue: #3d8bff;
+  --green: #3ddc84;
+  --card: rgba(20,22,52,.72);
+  --serif: "Instrument Serif", Georgia, serif;
+  --sans: "Inter", system-ui, -apple-system, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--night);
+  color: var(--ink);
+  font-family: var(--sans);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+a { color: inherit; }
+code, pre, .mono { font-family: var(--mono); }
+.wrap { width: min(1120px, 100% - 32px); margin-inline: auto; }
+
+/* ── nav ─────────────────────────────────────────── */
+nav {
+  position: fixed; inset: 0 0 auto 0; z-index: 50;
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  background: rgba(7,8,26,.55);
+  border-bottom: 1px solid var(--line);
+}
+nav .wrap { display: flex; align-items: center; justify-content: space-between; height: 56px; }
+.logo { display: flex; align-items: center; gap: 10px; font-weight: 600; letter-spacing: -.01em; text-decoration: none; }
+.logo svg { width: 26px; height: 26px; }
+nav .links { display: flex; gap: 22px; font-size: 14px; color: var(--muted); }
+nav .links a { text-decoration: none; transition: color .2s; }
+nav .links a:hover { color: var(--ink); }
+.gh-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 7px 14px; border-radius: 999px; font-size: 13px; font-weight: 500;
+  border: 1px solid var(--line); background: rgba(255,255,255,.04);
+  text-decoration: none; transition: background .2s, border-color .2s;
+}
+.gh-btn:hover { background: rgba(255,255,255,.09); border-color: rgba(255,255,255,.2); }
+.gh-btn svg { width: 16px; height: 16px; }
+@media (max-width: 720px) { nav .links { display: none; } }
+
+/* ── hero ────────────────────────────────────────── */
+.hero {
+  position: relative; min-height: 100svh; padding: 140px 0 120px;
+  display: grid; place-items: center; text-align: center; overflow: hidden;
+  isolation: isolate;
+}
+.sky {
+  position: absolute; inset: 0; z-index: -3;
+  background: linear-gradient(180deg, #05061a 0%, #0d0f33 38%, #2a1550 62%, #6b2350 78%, #c2453f 92%, #ff8a3c 100%);
+  animation: dawn 9s ease-out both;
+}
+@keyframes dawn { from { filter: brightness(.35) saturate(.6); } to { filter: none; } }
+.stars { position: absolute; inset: 0; z-index: -2; animation: starsfade 9s ease-out both; }
+.stars i { position: absolute; width: 2px; height: 2px; background: #fff; border-radius: 50%; animation: twinkle 3s infinite ease-in-out; }
+@keyframes starsfade { from { opacity: 1; } to { opacity: .35; } }
+@keyframes twinkle { 50% { opacity: .2; } }
+.sun {
+  position: absolute; left: 50%; bottom: -250px; width: 420px; height: 420px; z-index: -1;
+  translate: -50% 0; border-radius: 50%;
+  background: radial-gradient(circle at 50% 45%, #fff3c4 0%, #ffd27a 30%, #ff9a3c 60%, #ff5f6d 100%);
+  box-shadow: 0 0 120px 40px rgba(255,140,60,.45), 0 0 300px 120px rgba(255,95,109,.25);
+  animation: rise 6s cubic-bezier(.2,.7,.2,1) both;
+}
+@keyframes rise { from { transform: translateY(260px); } to { transform: translateY(0); } }
+.horizon {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 120px; z-index: -1;
+  background:
+    repeating-linear-gradient(180deg, transparent 0 10px, rgba(7,8,26,.95) 10px 18px),
+    linear-gradient(180deg, transparent, var(--night));
+  mask: linear-gradient(180deg, transparent, #000 40%);
+  -webkit-mask: linear-gradient(180deg, transparent, #000 40%);
+}
+.kicker {
+  display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center;
+  padding: 6px 14px; border-radius: 999px; font-size: 13px; color: #ffd9b0;
+  background: rgba(255,154,60,.1); border: 1px solid rgba(255,154,60,.28);
+  margin-bottom: 28px;
+}
+.kicker b { font-weight: 600; color: #fff; }
+.kicker .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--sun); box-shadow: 0 0 10px var(--sun); }
+h1 {
+  font-family: var(--serif); font-weight: 400;
+  font-size: clamp(48px, 8.6vw, 112px); line-height: .95; letter-spacing: -.02em;
+  max-width: 14ch; margin-inline: auto;
+}
+h1 em {
+  font-style: italic;
+  background: linear-gradient(90deg, var(--sun), var(--rose) 60%, var(--violet));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.lede { text-shadow: 0 1px 12px rgba(7,8,26,.6); max-width: 600px; margin: 28px auto 0; font-size: clamp(16px, 2.1vw, 19px); color: #d8d6e8; }
+.lede strong { color: #fff; font-weight: 600; }
+.ctas { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 38px; }
+.btn {
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 14px 22px; border-radius: 14px; font-weight: 600; font-size: 15px;
+  text-decoration: none; border: 0; cursor: pointer; transition: transform .2s, box-shadow .2s;
+}
+.btn:hover { transform: translateY(-2px); }
+.btn-primary {
+  color: #1a0d05;
+  background: linear-gradient(135deg, #ffd27a, var(--sun-2));
+  box-shadow: 0 10px 40px -8px rgba(255,122,69,.7), inset 0 1px 0 rgba(255,255,255,.5);
+}
+.btn-ghost {
+  font-family: var(--mono); font-weight: 400; font-size: 14px; color: var(--ink);
+  background: rgba(10,10,30,.55); border: 1px solid rgba(255,255,255,.14);
+  backdrop-filter: blur(8px);
+}
+.btn-ghost .prompt { color: var(--sun); }
+.btn-ghost .copied { color: var(--green); }
+
+/* fake macOS menu bar */
+.menubar {
+  position: absolute; top: 76px; right: max(16px, calc((100% - 1120px) / 2));
+  display: flex; align-items: center; gap: 16px;
+  padding: 6px 14px; border-radius: 10px; font-size: 13px;
+  background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.12);
+  backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  animation: dropin .8s 1.2s both cubic-bezier(.2,.8,.2,1);
+  color: #eceaf6;
+}
+.menubar .status { display: inline-flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; padding: 2px 8px; border-radius: 6px; background: rgba(255,255,255,.12); }
+.menubar svg { width: 15px; height: 15px; }
+.menubar .dim { color: #b5b3cc; }
+@keyframes dropin { from { opacity: 0; transform: translateY(-14px); } }
+@media (max-width: 720px) { .menubar { left: 50%; right: auto; translate: -50% 0; white-space: nowrap; } .menubar .dim { display: none; } }
+
+/* ── sections ────────────────────────────────────── */
+section { padding: 120px 0; position: relative; }
+.eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--sun); margin-bottom: 18px; }
+h2 { font-family: var(--serif); font-weight: 400; font-size: clamp(38px, 5.4vw, 66px); line-height: 1; letter-spacing: -.015em; max-width: 18ch; }
+h2 em { font-style: italic; color: var(--sun); }
+.sub { color: var(--muted); max-width: 620px; margin-top: 18px; font-size: 17px; }
+
+.reveal { opacity: 0; transform: translateY(28px); transition: opacity .9s cubic-bezier(.2,.7,.2,1), transform .9s cubic-bezier(.2,.7,.2,1); }
+.reveal.in { opacity: 1; transform: none; }
+
+/* timeline */
+.timeline { margin-top: 56px; padding: 32px; border-radius: 24px; background: var(--card); border: 1px solid var(--line); }
+.tl-head { display: grid; grid-template-columns: 150px 1fr; gap: 16px; font-family: var(--mono); font-size: 11px; color: var(--faint); }
+.tl-hours { position: relative; height: 18px; }
+.tl-hours span { position: absolute; translate: -50% 0; }
+.tl-row { display: grid; grid-template-columns: 150px 1fr; gap: 16px; align-items: center; margin-top: 22px; }
+.tl-label { font-size: 14px; font-weight: 600; }
+.tl-label small { display: block; font-weight: 400; color: var(--muted); font-size: 12px; }
+.tl-track { position: relative; height: 44px; border-radius: 10px; background: rgba(255,255,255,.03); border: 1px solid var(--line); overflow: hidden; }
+.seg {
+  position: absolute; top: 6px; bottom: 6px; border-radius: 7px;
+  display: flex; align-items: center; padding-inline: 10px; font-size: 11.5px; font-weight: 600; white-space: nowrap; overflow: hidden;
+  transform-origin: left; transform: scaleX(0); transition: transform 1s cubic-bezier(.2,.7,.2,1);
+}
+.in .seg { transform: scaleX(1); }
+.seg.win { background: linear-gradient(90deg, rgba(61,139,255,.35), rgba(139,108,255,.35)); border: 1px solid rgba(139,108,255,.5); color: #dcd6ff; }
+.seg.idle { background: rgba(255,255,255,.05); border: 1px dashed rgba(255,255,255,.18); color: var(--muted); font-weight: 500; }
+.seg.lock { background: repeating-linear-gradient(135deg, rgba(255,95,109,.28) 0 8px, rgba(255,95,109,.12) 8px 16px); border: 1px solid rgba(255,95,109,.6); color: #ffc2c8; }
+.seg.ping { background: linear-gradient(90deg, rgba(255,179,71,.35), rgba(255,122,69,.3)); border: 1px solid rgba(255,179,71,.6); color: #ffe2bf; }
+.tick { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--sun); box-shadow: 0 0 10px var(--sun); }
+.tl-legend { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 26px; font-size: 13px; color: var(--muted); }
+.tl-legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 8px; vertical-align: -1px; }
+.tl-scroll { overflow-x: auto; }
+.tl-inner { min-width: 720px; }
+.tl-callout { margin-top: 26px; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+.stat { padding: 18px 20px; border-radius: 16px; background: rgba(255,255,255,.03); border: 1px solid var(--line); }
+.stat b { font-family: var(--serif); font-size: 44px; font-weight: 400; display: block; line-height: 1; }
+.stat span { color: var(--muted); font-size: 14px; }
+.stat.good b { color: var(--green); }
+.stat.bad b { color: #ff7a85; }
+
+/* features split */
+.split { display: grid; grid-template-columns: 1fr 1fr; gap: 64px; align-items: center; }
+@media (max-width: 900px) { .split { grid-template-columns: 1fr; gap: 40px; } }
+.bullets { list-style: none; margin-top: 30px; display: grid; gap: 16px; }
+.bullets li { display: grid; grid-template-columns: 28px 1fr; gap: 12px; color: #d3d1e4; }
+.bullets li::before {
+  content: ""; width: 22px; height: 22px; margin-top: 2px; border-radius: 7px;
+  background: linear-gradient(135deg, var(--sun), var(--rose));
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M20 6 9 17l-5-5' fill='none' stroke='%23000' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 14px no-repeat, linear-gradient(#000 0 0);
+  mask-composite: exclude; -webkit-mask-composite: xor;
+}
+.bullets b { color: #fff; font-weight: 600; }
+
+/* fake dropdown menu */
+.mac-menu {
+  width: min(360px, 100%); margin-inline: auto;
+  padding: 6px; border-radius: 14px;
+  background: rgba(38,38,58,.86); border: 1px solid rgba(255,255,255,.14);
+  box-shadow: 0 40px 80px -20px rgba(0,0,0,.8), 0 0 0 .5px rgba(0,0,0,.6);
+  backdrop-filter: blur(30px); font-size: 13.5px; color: #ecebf5;
+  transform: perspective(1200px) rotateY(-8deg) rotateX(4deg);
+  transition: transform .6s;
+}
+.mac-menu:hover { transform: none; }
+.mm-h { padding: 8px 12px 4px; font-size: 11.5px; font-weight: 600; color: #9c9ab5; }
+.mm-i { display: flex; align-items: center; gap: 10px; padding: 5px 12px; border-radius: 7px; }
+.mm-i.act:hover { background: #3d6dff; color: #fff; }
+.mm-i .k { margin-left: auto; color: #8f8da8; font-size: 12.5px; }
+.mm-i.act:hover .k { color: #dfe6ff; }
+.mm-i svg { width: 15px; height: 15px; flex: none; }
+.mm-bar { margin: 2px 12px 2px 37px; font-family: var(--mono); font-size: 10px; letter-spacing: -.5px; color: var(--green); }
+.mm-sub { padding: 1px 12px 3px 37px; color: #c7c5da; font-size: 12.5px; }
+.mm-sep { height: 1px; margin: 5px 10px; background: rgba(255,255,255,.12); }
+
+/* fake stats window */
+.window {
+  border-radius: 16px; overflow: hidden;
+  background: #1c1d2b; border: 1px solid rgba(255,255,255,.12);
+  box-shadow: 0 60px 120px -30px rgba(0,0,0,.9), 0 0 0 .5px #000, 0 0 140px -40px rgba(139,108,255,.5);
+  font-size: 13px;
+}
+.win-bar { display: flex; align-items: center; gap: 8px; padding: 12px 14px; background: #24253a; border-bottom: 1px solid rgba(255,255,255,.07); }
+.win-bar i { width: 12px; height: 12px; border-radius: 50%; }
+.win-bar span { margin-left: auto; margin-right: auto; translate: -26px 0; color: #9997b2; font-size: 12.5px; font-weight: 500; }
+.win-body { padding: 20px 22px 24px; }
+.win-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.win-top h4 { font-size: 14px; font-weight: 600; }
+.seg-ctl { display: flex; padding: 2px; border-radius: 8px; background: rgba(255,255,255,.07); font-size: 12px; }
+.seg-ctl button { all: unset; cursor: pointer; padding: 4px 11px; border-radius: 6px; color: #c8c6dc; transition: background .2s; }
+.seg-ctl button.on { background: #5a5b78; color: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.4); }
+.kpis { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 18px; }
+.kpi small { display: block; font-size: 9.5px; letter-spacing: .04em; color: #8a88a3; text-transform: uppercase; }
+.kpi b { font-size: 18px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.kpi.w b { color: var(--blue); }
+.kpi.g b { color: var(--green); }
+.chart { display: flex; align-items: flex-end; gap: 4px; height: 110px; margin-top: 18px; padding-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,.08); }
+.chart i { flex: 1; border-radius: 3px 3px 0 0; background: var(--blue); height: 0; transition: height .9s cubic-bezier(.2,.7,.2,1); }
+.note { margin-top: 10px; font-size: 10.5px; color: #77758f; }
+.ws-h { margin-top: 18px; font-size: 9.5px; letter-spacing: .04em; color: #8a88a3; text-transform: uppercase; }
+.ws { display: grid; grid-template-columns: 96px 1fr 56px; gap: 12px; align-items: center; margin-top: 8px; font-size: 12px; }
+.ws .b { height: 6px; border-radius: 99px; background: var(--blue); width: 0; transition: width 1s cubic-bezier(.2,.7,.2,1); }
+.ws .n { text-align: right; font-variant-numeric: tabular-nums; }
+.sess { display: grid; grid-template-columns: 62px 78px 1fr auto auto; gap: 12px; margin-top: 7px; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.sess .m { color: #8a88a3; }
+.sess .hot { color: var(--blue); }
+.sess .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #a9a7c0; }
+@media (max-width: 560px) { .sess { grid-template-columns: 58px 1fr auto; } .sess .t, .sess .c { display: none; } }
+
+/* wall of love */
+.love { margin-top: 56px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
+@media (max-width: 760px) { .love { grid-template-columns: 1fr; } }
+.review { padding: 22px; border-radius: 20px; background: var(--card); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 16px; transition: transform .3s, border-color .3s; }
+.review:nth-child(odd) { rotate: -.6deg; }
+.review:nth-child(even) { rotate: .5deg; }
+.review:hover { transform: translateY(-4px) rotate(0deg); border-color: rgba(255,179,71,.35); }
+.stars-row { color: var(--sun); letter-spacing: 2px; font-size: 15px; }
+.stars-row span { letter-spacing: 0; margin-left: 8px; font-size: 12px; color: var(--faint); font-family: var(--mono); }
+.slack { display: grid; grid-template-columns: 38px 1fr; gap: 10px; padding: 14px; border-radius: 10px; background: #1a1d21; border: 1px solid #2c2f34; font-family: -apple-system, "Lato", var(--sans); font-size: 15px; color: #d1d2d3; }
+.slack .av { width: 38px; height: 38px; border-radius: 8px; display: grid; place-items: center; font-weight: 700; color: #fff; font-size: 17px; }
+.slack .who { display: flex; align-items: baseline; gap: 8px; }
+.slack .who b { color: #fff; font-weight: 800; font-size: 15px; }
+.slack time { font-size: 12px; color: #9a9b9e; }
+.slack p { margin-top: 2px; line-height: 1.45; }
+.slack .mention { color: #1d9bd1; background: rgba(29,155,209,.12); padding: 0 3px; border-radius: 3px; }
+.reacts { display: flex; gap: 6px; margin-top: 8px; }
+.reacts span { display: inline-flex; gap: 6px; align-items: center; padding: 2px 8px; border-radius: 99px; background: rgba(29,155,209,.12); border: 1px solid rgba(29,155,209,.5); font-size: 13px; }
+.reacts i { font-style: normal; font-size: 12px; color: #9ed7f1; font-weight: 600; }
+.review figcaption { font-family: var(--serif); font-style: italic; font-size: 22px; line-height: 1.2; color: #e9e6f5; }
+
+/* install */
+.steps { margin-top: 56px; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px; counter-reset: s; }
+.step { position: relative; padding: 26px 22px 22px; border-radius: 20px; background: var(--card); border: 1px solid var(--line); counter-increment: s; transition: border-color .3s, transform .3s; }
+.step:hover { border-color: rgba(255,179,71,.4); transform: translateY(-4px); }
+.step::before { content: counter(s, decimal-leading-zero); font-family: var(--mono); font-size: 12px; color: var(--sun); }
+.step h3 { font-size: 17px; font-weight: 600; margin: 10px 0 6px; }
+.step p { color: var(--muted); font-size: 14px; }
+.code {
+  position: relative; margin-top: 16px; padding: 12px 44px 12px 14px; border-radius: 12px;
+  background: #05060f; border: 1px solid var(--line); font-family: var(--mono); font-size: 12.5px; color: #e8e6f5;
+  overflow-x: auto; white-space: pre;
+}
+.code .c { color: var(--faint); }
+.copy {
+  all: unset; cursor: pointer; position: absolute; top: 8px; right: 8px;
+  width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px; color: var(--muted);
+  transition: background .2s, color .2s;
+}
+.copy:hover { background: rgba(255,255,255,.08); color: #fff; }
+.copy svg { width: 15px; height: 15px; }
+.req { margin-top: 28px; color: var(--muted); font-size: 14px; }
+.req code { color: #e8e6f5; background: rgba(255,255,255,.06); padding: 2px 6px; border-radius: 6px; font-size: 12.5px; }
+
+/* faq */
+.faq { margin-top: 48px; display: grid; gap: 12px; max-width: 820px; }
+details { border-radius: 16px; background: var(--card); border: 1px solid var(--line); transition: border-color .3s; }
+details[open] { border-color: rgba(255,179,71,.35); }
+summary { cursor: pointer; list-style: none; padding: 20px 24px; font-size: 17px; font-weight: 500; display: flex; justify-content: space-between; gap: 16px; }
+summary::-webkit-details-marker { display: none; }
+summary::after { content: "+"; font-family: var(--mono); color: var(--sun); font-size: 20px; line-height: 1; transition: rotate .3s; }
+details[open] summary::after { rotate: 45deg; }
+details p { padding: 0 24px 22px; color: var(--muted); }
+details p code { color: #e8e6f5; font-size: 13px; }
+
+/* marquee */
+.marquee { border-block: 1px solid var(--line); padding: 18px 0; overflow: hidden; background: rgba(255,255,255,.015); }
+.marquee .track { display: flex; gap: 48px; width: max-content; animation: scroll 40s linear infinite; font-family: var(--serif); font-style: italic; font-size: 26px; color: #c9c6e0; }
+.marquee span::before { content: "☀"; font-style: normal; color: var(--sun); margin-right: 48px; font-size: 18px; vertical-align: 3px; }
+@keyframes scroll { to { transform: translateX(-50%); } }
+
+/* cta + footer */
+.final { text-align: center; padding: 140px 0; overflow: hidden; }
+.final h2 { margin-inline: auto; max-width: 16ch; }
+.final .glow { position: absolute; left: 50%; bottom: -320px; width: 760px; height: 520px; translate: -50% 0; z-index: -1; border-radius: 50%; background: radial-gradient(closest-side, rgba(255,122,69,.45), rgba(255,95,143,.18), transparent); filter: blur(10px); }
+footer { border-top: 1px solid var(--line); padding: 36px 0 48px; color: var(--faint); font-size: 13px; }
+footer .wrap { display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+footer a { color: var(--muted); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  .reveal { opacity: 1; transform: none; }
+  .seg { transform: none; }
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="logo" href="#">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffd27a"/><stop offset="1" stop-color="#ff5f6d"/></linearGradient></defs><circle cx="16" cy="19" r="8" fill="url(#lg)"/><rect x="0" y="19" width="32" height="13" fill="#07081a"/><rect x="4" y="20.5" width="24" height="2" rx="1" fill="#ff7a45"/><rect x="8" y="24.5" width="16" height="2" rx="1" fill="#ff5f8f" opacity=".7"/></svg>
+      autowake
+    </a>
+    <div class="links">
+      <a href="#how">How it works</a>
+      <a href="#app">Menu bar app</a>
+      <a href="#love">Reviews</a>
+      <a href="#install">Install</a>
+      <a href="#faq">FAQ</a>
+    </div>
+    <a class="gh-btn" href="https://github.com/adrians5j/claude-autowake">
+      <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      Star it, maybe
+    </a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="sky"></div>
+  <div class="stars" id="stars"></div>
+  <div class="sun"></div>
+  <div class="horizon"></div>
+
+  <div class="menubar" aria-hidden="true">
+    <span class="dim">Thu 06:00</span>
+    <span class="status">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2v6M4.9 10.9l1.4 1.4M2 18h2M20 18h2M17.7 12.3l1.4-1.4M22 22H2M8 6l4-4 4 4M16 18a4 4 0 0 0-8 0"/></svg>
+      <span id="mb">3% · 4h 59m</span>
+    </span>
+  </div>
+
+  <div class="wrap">
+    <div class="kicker"><span class="dot"></span><b>vibe-coded</b> in one prompt · zero regrets</div>
+    <h1>Your Claude limit resets <em>before you wake&nbsp;up.</em></h1>
+    <p class="lede">
+      At 6am, while you're asleep, your Mac wakes up and says <strong>"rise and shine"</strong> to Haiku.
+      That starts your 5-hour usage window, so it resets at <strong>11:00</strong> instead of 14:00.
+      You get a fresh limit right before lunch, not right before you leave.
+    </p>
+    <div class="ctas">
+      <a class="btn btn-primary" href="#install">
+        Get it running
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M19 12l-7 7-7-7"/></svg>
+      </a>
+      <button class="btn btn-ghost" data-copy="git clone https://github.com/adrians5j/claude-autowake.git">
+        <span class="prompt">$</span> <span class="label">git clone adrians5j/claude-autowake</span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="marquee" aria-hidden="true">
+  <div class="track">
+    <span>"rise and shine"</span><span>"morning sunshine"</span><span>"hi"</span><span>one message to Haiku</span><span>launchd + pmset + caffeinate</span><span>no DMG, sorry Pavel</span><span>built by asking nicely</span>
+    <span>"rise and shine"</span><span>"morning sunshine"</span><span>"hi"</span><span>one message to Haiku</span><span>launchd + pmset + caffeinate</span><span>no DMG, sorry Pavel</span><span>built by asking nicely</span>
+  </div>
+</div>
+
+<section id="how">
+  <div class="wrap">
+    <div class="reveal">
+      <div class="eyebrow">How it works</div>
+      <h2>Claude's 5-hour clock starts at your first message. <em>So send it at 6.</em></h2>
+      <p class="sub">The window is rolling. It starts with the first request and resets five hours later, however much you used. If that first request is a two-word greeting fired by launchd at dawn, the reset moves three hours earlier.</p>
+    </div>
+
+    <div class="timeline reveal" id="tl">
+      <div class="tl-scroll"><div class="tl-inner">
+        <div class="tl-head"><div></div><div class="tl-hours" id="hours"></div></div>
+
+        <div class="tl-row">
+          <div class="tl-label">Without autowake<small>first message at 9:00</small></div>
+          <div class="tl-track" data-row="without"></div>
+        </div>
+        <div class="tl-row">
+          <div class="tl-label">With autowake<small>pings at 6:00, 11:05, 16:10</small></div>
+          <div class="tl-track" data-row="with"></div>
+        </div>
+      </div></div>
+
+      <div class="tl-legend">
+        <span><i style="background:rgba(255,179,71,.5)"></i>Window started by a ping</span>
+        <span><i style="background:rgba(139,108,255,.5)"></i>Window you're working in</span>
+        <span><i style="background:rgba(255,95,109,.5)"></i>Limit hit, waiting for reset</span>
+      </div>
+
+      <div class="tl-callout">
+        <div class="stat bad"><b>2h 30m</b><span>staring at "limit reached" without it, if you burn through by 11:30</span></div>
+        <div class="stat good"><b>0m</b><span>with it. The window rolls over at 11:00, before you run out.</span></div>
+        <div class="stat"><b>~10</b><span>tokens per ping. The cheapest model, a one-line greeting.</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="app">
+  <div class="wrap split">
+    <div class="reveal">
+      <div class="eyebrow">The menu bar app</div>
+      <h2>Your limit, <em>always in view.</em></h2>
+      <p class="sub">AutowakeBar is a single Swift file that lives in your menu bar. It reads the same usage numbers as Claude Code's <code>/usage</code>, using the login already in your Keychain.</p>
+      <ul class="bullets">
+        <li><span><b>5-hour usage and time to reset</b> right in the menu bar, turning orange at 70% and red at 90%.</span></li>
+        <li><span><b>7-day usage</b>, so the weekly cap doesn't sneak up on you on a Thursday.</span></li>
+        <li><span><b>Health checks</b> for the launchd agents, plus your next ping and how the last one went.</span></li>
+        <li><span><b>Ping now</b> for the days you're up before the sun.</span></li>
+      </ul>
+    </div>
+    <div class="reveal">
+      <div class="mac-menu" aria-hidden="true">
+        <div class="mm-h">Claude usage</div>
+        <div class="mm-i"><svg viewBox="0 0 24 24" fill="none" stroke="#3ddc84" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 12l-4-3" stroke-linecap="round"/></svg>5-hour: 34% used</div>
+        <div class="mm-bar">███████░░░░░░░░░░░░░</div>
+        <div class="mm-sub">Resets 11:00 (in 2h 14m)</div>
+        <div class="mm-i"><svg viewBox="0 0 24 24" fill="none" stroke="#3ddc84" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 12l-2-4" stroke-linecap="round"/></svg>7-day: 18% used</div>
+        <div class="mm-bar">████░░░░░░░░░░░░░░░░</div>
+        <div class="mm-sub">Resets Mon 09:00 (in 4d 2h)</div>
+        <div class="mm-sep"></div>
+        <div class="mm-h">Autowake</div>
+        <div class="mm-i"><svg viewBox="0 0 24 24" fill="#3ddc84"><circle cx="12" cy="12" r="10"/><path d="M7 12l3.5 3.5L17 9" stroke="#1c1d2b" stroke-width="2.4" fill="none" stroke-linecap="round"/></svg>Ping agent loaded</div>
+        <div class="mm-i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8h13v5a6 6 0 0 1-6 6h-1a6 6 0 0 1-6-6V8zM17 9h1.5a2.5 2.5 0 0 1 0 5H17M4 22h14"/></svg>Caffeinate agent loaded, idle</div>
+        <div class="mm-i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2M5 3 2 6M22 6l-3-3"/></svg>Next ping 11:05 (in 2h 19m)</div>
+        <div class="mm-i"><svg viewBox="0 0 24 24" fill="none" stroke="#3ddc84" stroke-width="1.8"><path d="M12 2l2.4 2.1 3.2-.3.9 3.1 2.8 1.6-1 3 1 3-2.8 1.6-.9 3.1-3.2-.3L12 22l-2.4-2.1-3.2.3-.9-3.1-2.8-1.6 1-3-1-3 2.8-1.6.9-3.1 3.2.3z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg>Last ping 06:00 (2h 46m ago): ok</div>
+        <div class="mm-sep"></div>
+        <div class="mm-i act">Token stats…<span class="k">⌘T</span></div>
+        <div class="mm-i act">Ping now</div>
+        <div class="mm-i act">Open last log</div>
+        <div class="mm-i act">Refresh<span class="k">⌘R</span></div>
+        <div class="mm-sep"></div>
+        <div class="mm-i act">Quit<span class="k">⌘Q</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="stats">
+  <div class="wrap">
+    <div class="reveal">
+      <div class="eyebrow">Token stats</div>
+      <h2>Find out <em>where the tokens went.</em></h2>
+      <p class="sub">Press ⌘T and get a breakdown of the current window, today, the last 24 hours or the week, read straight from Claude Code's local transcripts. Nothing leaves your machine. "Weighted" counts tokens at their price ratio, so the 700M cache reads stop hiding the session that actually ate your limit.</p>
+    </div>
+
+    <div class="window reveal" id="win" style="margin-top:56px" aria-label="Sample token stats window">
+      <div class="win-bar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span>Token stats</span></div>
+      <div class="win-body">
+        <div class="win-top">
+          <h4>Where the tokens went</h4>
+          <div class="seg-ctl" id="ranges">
+            <button class="on" data-r="0">This window</button><button data-r="1">Today</button><button data-r="2">24 hours</button><button data-r="3">7 days</button>
+          </div>
+        </div>
+        <div class="kpis" id="kpis"></div>
+        <div class="chart" id="chart"></div>
+        <div class="note">Weighted at API price ratios: cache reads count a tenth of fresh input, cache writes 1.25x, output 5x. Sample data.</div>
+        <div class="ws-h">By workspace</div>
+        <div id="ws"></div>
+        <div class="ws-h" style="margin-top:20px">Biggest sessions</div>
+        <div id="sess"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="love">
+  <div class="wrap">
+    <div class="reveal">
+      <div class="eyebrow">Wall of love</div>
+      <h2>Trusted by <em>three people</em> in one Slack thread.</h2>
+      <p class="sub">Unedited reviews from real users, all collected within four minutes of launch.</p>
+    </div>
+
+    <div class="love">
+      <figure class="review reveal">
+        <div class="stars-row">★★★★★ <span>verified user</span></div>
+        <div class="slack">
+          <div class="av" style="background:linear-gradient(135deg,#f6a34a,#d9534f)">S</div>
+          <div>
+            <div class="who"><b>sven</b><time>Just now</time></div>
+            <p>thanks 🙏</p>
+            <div class="reacts"><span>🙏 <i>3</i></span><span>🌅 <i>2</i></span></div>
+          </div>
+        </div>
+        <figcaption>"Life-changing. Two words was all he needed."</figcaption>
+      </figure>
+
+      <figure class="review reveal">
+        <div class="stars-row">★★★★☆ <span>docked one star for packaging</span></div>
+        <div class="slack">
+          <div class="av" style="background:linear-gradient(135deg,#5b8cff,#8b6cff)">P</div>
+          <div>
+            <div class="who"><b>pavel</b><time>2 minutes ago</time></div>
+            <p>no release, no DMG? come on… 😂</p>
+            <div class="reacts"><span>😂 <i>4</i></span><span>📦 <i>1</i></span></div>
+          </div>
+        </div>
+        <figcaption>We heard you, Pavel. You got a website instead.</figcaption>
+      </figure>
+
+      <figure class="review reveal">
+        <div class="stars-row">★★★★★ <span>the author, so, unbiased</span></div>
+        <div class="slack">
+          <div class="av" style="background:linear-gradient(135deg,#3ddc84,#1f9d8b)">A</div>
+          <div>
+            <div class="who"><b>Adrian</b><time>4 minutes ago</time></div>
+            <p>so it's an app vibe coded on top of the claude-autowake tool you shared <span class="mention">@sven</span></p>
+            <p>not sure if it helps, but it's up</p>
+          </div>
+        </div>
+        <figcaption>Confident launch messaging, as is tradition.</figcaption>
+      </figure>
+
+      <figure class="review reveal">
+        <div class="stars-row">☆☆☆☆☆ <span>pending a flashy website</span></div>
+        <div class="slack">
+          <div class="av" style="background:linear-gradient(135deg,#3ddc84,#1f9d8b)">A</div>
+          <div>
+            <div class="who"><b>Adrian</b><time>Just now</time></div>
+            <p>😄 😄</p>
+            <p>no flashy website either</p>
+            <p>cccc</p>
+          </div>
+        </div>
+        <figcaption>Update: you're looking at it.</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <div class="reveal">
+      <div class="eyebrow">Install</div>
+      <h2>Four commands. <em>No DMG.</em></h2>
+      <p class="sub">Pavel asked for a DMG. There's a <code>build.sh</code> instead. It compiles in about three seconds, and you get to read what you're running.</p>
+    </div>
+
+    <div class="steps">
+      <div class="step reveal">
+        <h3>Clone it</h3>
+        <p>Everything lives in a handful of shell scripts and one Swift file.</p>
+        <div class="code">git clone https://github.com/adrians5j/claude-autowake.git
+cd claude-autowake<button class="copy" aria-label="Copy" data-copy="git clone https://github.com/adrians5j/claude-autowake.git && cd claude-autowake"></button></div>
+      </div>
+      <div class="step reveal">
+        <h3>Pick your times</h3>
+        <p>Set <code>PING_TIMES</code> in <code>config.sh</code>. Keep them at least 5 hours apart.</p>
+        <div class="code"><span class="c"># config.sh</span>
+PING_TIMES=("06:00" "11:05" "16:10")<button class="copy" aria-label="Copy" data-copy='PING_TIMES=("06:00" "11:05" "16:10")'></button></div>
+      </div>
+      <div class="step reveal">
+        <h3>Install the schedule</h3>
+        <p>Sets up the launchd agents and a <code>pmset</code> wake. Asks for sudo once.</p>
+        <div class="code">./install.sh
+./status.sh<button class="copy" aria-label="Copy" data-copy="./install.sh && ./status.sh"></button></div>
+      </div>
+      <div class="step reveal">
+        <h3>Add the menu bar app</h3>
+        <p>Optional, but it's the fun part. Starts at login.</p>
+        <div class="code">./menubar/build.sh --install<button class="copy" aria-label="Copy" data-copy="./menubar/build.sh --install"></button></div>
+      </div>
+    </div>
+    <p class="req reveal">You'll need macOS 13+, Claude Code installed and logged in, and the Xcode command line tools (<code>xcode-select --install</code>). Keep the Mac plugged in overnight so it can wake itself. Changed <code>config.sh</code> later? Run <code>./install.sh</code> again; the schedule is baked in at install time.</p>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="wrap">
+    <div class="reveal">
+      <div class="eyebrow">Questions nobody asked</div>
+      <h2>FAQ</h2>
+    </div>
+    <div class="faq reveal">
+      <details>
+        <summary>Where's the DMG?</summary>
+        <p>There isn't one. Unsigned apps from strangers on the internet make macOS nervous, and Gatekeeper is right to be. <code>./menubar/build.sh</code> builds it locally with <code>swiftc</code> in a few seconds, from source you can read in one sitting.</p>
+      </details>
+      <details>
+        <summary>Was this really vibe-coded?</summary>
+        <p>Yes. The menu bar app, the token stats window and this website were each about one prompt to Claude Code, plus some light heckling in Slack. The original autowake scripts are by Luca Lapenna; this fork added the app.</p>
+      </details>
+      <details>
+        <summary>Does pinging Haiku cost anything?</summary>
+        <p>One short greeting to the smallest model, a few times a day. It barely registers on the usage meter. It counts against your subscription like any other message, and nothing is billed separately.</p>
+      </details>
+      <details>
+        <summary>What if my Mac is asleep at 6?</summary>
+        <p>The installer schedules a <code>pmset</code> wake a few minutes before the first ping, and a <code>caffeinate</code> agent keeps the Mac awake until the last ping of the day. It has to be plugged in for the wake to fire.</p>
+      </details>
+      <details>
+        <summary>Is this against the rules?</summary>
+        <p>It sends a normal message from your own Claude Code login, on your own machine, at a time you picked. That's the same as typing "hi" at 6am, just with less suffering. Not affiliated with Anthropic.</p>
+      </details>
+      <details>
+        <summary>Windows? Linux?</summary>
+        <p>No. It's built on launchd, pmset and caffeinate. A cron job with the same <code>claude -p "hi"</code> line gets you most of the way, if you want to vibe-code the port yourself.</p>
+      </details>
+    </div>
+  </div>
+</section>
+
+<section class="final">
+  <div class="glow"></div>
+  <div class="wrap reveal">
+    <div class="eyebrow">Go to bed</div>
+    <h2>Let launchd say <em>good morning</em> for you.</h2>
+    <div class="ctas">
+      <a class="btn btn-primary" href="https://github.com/adrians5j/claude-autowake">View on GitHub</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Fork of <a href="https://github.com/1mshy/claude-autowake">1mshy/claude-autowake</a> by Luca Lapenna. Menu bar app and this page vibe-coded with Claude Code.</span>
+    <span>Not affiliated with Anthropic.</span>
+  </div>
+</footer>
+
+<script>
+// Stars
+(() => {
+  const s = document.getElementById('stars');
+  for (let i = 0; i < 90; i++) {
+    const el = document.createElement('i');
+    el.style.left = Math.random() * 100 + '%';
+    el.style.top = Math.random() * 65 + '%';
+    el.style.opacity = (0.3 + Math.random() * 0.7).toFixed(2);
+    el.style.animationDelay = (Math.random() * 3).toFixed(2) + 's';
+    if (Math.random() < 0.15) { el.style.width = el.style.height = '3px'; }
+    s.appendChild(el);
+  }
+})();
+
+// Menu bar status ticking down like the real one (sped up: 1 second = 1 minute)
+(() => {
+  const el = document.getElementById('mb');
+  let mins = 299, pct = 3;
+  setInterval(() => {
+    mins = mins > 0 ? mins - 1 : 299;
+    if (mins === 299) pct = 3;
+    if (Math.random() < 0.35) pct = Math.min(99, pct + 1);
+    el.textContent = `${pct}% · ${Math.floor(mins / 60)}h ${mins % 60}m`;
+  }, 1000);
+})();
+
+// Copy buttons
+const copyIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
+const checkIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="#3ddc84" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg>';
+document.querySelectorAll('.copy').forEach(b => b.innerHTML = copyIcon);
+document.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(b.dataset.copy); } catch (e) { return; }
+  if (b.classList.contains('copy')) {
+    b.innerHTML = checkIcon; setTimeout(() => b.innerHTML = copyIcon, 1400);
+  } else {
+    const l = b.querySelector('.label'), old = l.textContent;
+    l.textContent = 'copied, go paste it'; l.classList.add('copied');
+    setTimeout(() => { l.textContent = old; l.classList.remove('copied'); }, 1600);
+  }
+}));
+
+// Timeline (hours 5..21)
+(() => {
+  const H0 = 5, H1 = 21, pos = h => ((h - H0) / (H1 - H0) * 100) + '%', w = (a, b) => ((b - a) / (H1 - H0) * 100) + '%';
+  const hours = document.getElementById('hours');
+  for (let h = 6; h <= 20; h += 2) {
+    const s = document.createElement('span'); s.style.left = pos(h); s.textContent = String(h).padStart(2, '0') + ':00'; hours.appendChild(s);
+  }
+  const rows = {
+    without: [
+      ['idle', 5, 9, 'no window yet'], ['win', 9, 11.5, 'working'], ['lock', 11.5, 14, 'limit reached'], ['win', 14, 19, 'next window'],
+    ],
+    with: [
+      ['ping', 6, 9, '"rise and shine"'], ['win', 9, 11, 'working'], ['ping', 11.08, 12, ''], ['win', 12, 16.08, 'fresh window'], ['ping', 16.17, 18, ''], ['win', 18, 21, 'and another'],
+    ],
+  };
+  for (const [row, segs] of Object.entries(rows)) {
+    const track = document.querySelector(`[data-row="${row}"]`);
+    segs.forEach(([cls, a, b, label], i) => {
+      const d = document.createElement('div');
+      d.className = 'seg ' + cls; d.style.left = pos(a); d.style.width = `calc(${w(a, b)} - 3px)`; d.textContent = label;
+      d.style.transitionDelay = (i * 0.15) + 's';
+      track.appendChild(d);
+    });
+    if (row === 'with') [6, 11.08, 16.17].forEach(h => { const t = document.createElement('div'); t.className = 'tick'; t.style.left = pos(h); track.appendChild(t); });
+  }
+})();
+
+// Stats window with sample data
+const ranges = [
+  { k: ['Weighted','9.8M','w'], fresh: '1.2k', write: '2.6M', read: '48.7M', out: '268.4k', req: '412', ctx: '124.6k',
+    chart: [12, 30, 55, 80, 64, 0, 0], ws: [['api', 3.6], ['web-app', 2.7], ['infra', 1.9], ['docs', 0.9], ['scratch', 0.2]],
+    sess: [['08:12','api','Refactor auth middleware',182,'214.3k','3.1M'],['07:58','web-app','Fix flaky checkout test',121,'138.0k','2.2M'],['09:40','infra','Terraform plan review',44,'512.8k','1.6M'],['10:05','docs','Changelog for 2.4',19,'61.2k','0.6M']] },
+  { k: ['Weighted','24.1M','w'], fresh: '3.4k', write: '6.9M', read: '121.5M', out: '702.0k', req: '1031', ctx: '124.9k',
+    chart: [8, 20, 34, 60, 45, 70, 92, 66, 40, 22, 10, 4], ws: [['api', 8.7], ['web-app', 6.9], ['infra', 4.4], ['docs', 2.6], ['scratch', 1.5]],
+    sess: [['13:30','web-app','Checkout redesign',301,'402.1k','5.9M'],['08:12','api','Refactor auth middleware',182,'214.3k','3.1M'],['15:02','infra','Cost alerts lambda',97,'188.4k','2.8M'],['09:40','infra','Terraform plan review',44,'512.8k','1.6M']] },
+  { k: ['Weighted','31.6M','w'], fresh: '4.1k', write: '8.8M', read: '160.2M', out: '914.3k', req: '1388', ctx: '121.8k',
+    chart: [30, 42, 18, 6, 2, 0, 0, 10, 26, 48, 70, 55, 82, 64, 38, 20], ws: [['api', 10.9], ['web-app', 9.2], ['infra', 6.1], ['docs', 3.2], ['scratch', 2.2]],
+    sess: [['Wed 19:10','api','Rate limiter rewrite',356,'688.0k','7.4M'],['13:30','web-app','Checkout redesign',301,'402.1k','5.9M'],['08:12','api','Refactor auth middleware',182,'214.3k','3.1M'],['15:02','infra','Cost alerts lambda',97,'188.4k','2.8M']] },
+  { k: ['Weighted','142.8M','w'], fresh: '17.6k', write: '41.3M', read: '0.71B', out: '4.2M', req: '6204', ctx: '121.0k',
+    chart: [62, 38, 12, 6, 74, 88, 70], ws: [['api', 49.3], ['web-app', 38.6], ['infra', 27.2], ['docs', 15.1], ['scratch', 12.6]],
+    sess: [['Mon 09:02','web-app','Migrate to the new router',1204,'812.6k','21.9M'],['Tue 14:40','api','Rate limiter rewrite',356,'688.0k','7.4M'],['Thu 13:30','web-app','Checkout redesign',301,'402.1k','5.9M'],['Fri 10:15','infra','Kubernetes upgrade dry run',210,'366.2k','4.8M']] },
+];
+const R = ri => {
+  const d = ranges[ri];
+  document.getElementById('kpis').innerHTML = [
+    ['Weighted', d.k[1], 'w'], ['Fresh in', d.fresh], ['Cache written', d.write], ['Cache read', d.read], ['Out', d.out],
+    ['Requests', d.req], ['Context / req', d.ctx], ['Window used', '34%', 'g'], ['Resets in', '2h 14m'],
+  ].map(([l, v, c]) => `<div class="kpi ${c || ''}"><small>${l}</small><b>${v}</b></div>`).join('');
+  const chart = document.getElementById('chart');
+  const max = Math.max(...d.chart);
+  chart.innerHTML = d.chart.map(() => '<i></i>').join('');
+  requestAnimationFrame(() => requestAnimationFrame(() => chart.querySelectorAll('i').forEach((b, i) => b.style.height = (d.chart[i] / max * 100) + '%')));
+  const wmax = d.ws[0][1];
+  document.getElementById('ws').innerHTML = d.ws.map(([n, v]) => `<div class="ws"><span>${n}</span><div><div class="b" data-w="${v / wmax * 100}"></div></div><span class="n">${v}M</span></div>`).join('');
+  requestAnimationFrame(() => requestAnimationFrame(() => document.querySelectorAll('#ws .b').forEach(b => b.style.width = b.dataset.w + '%')));
+  document.getElementById('sess').innerHTML = d.sess.map(([t, w, title, c, ctx, v]) => {
+    const hot = parseFloat(ctx) > 200 ? 'hot' : 'm';
+    return `<div class="sess"><span class="m">${t}</span><span>${w}</span><span class="t">${title}</span><span class="m c">${c} calls</span><span><span class="${hot}">${ctx} ctx</span>&nbsp;&nbsp;${v}</span></div>`;
+  }).join('');
+};
+let shown = false;
+document.querySelectorAll('#ranges button').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('#ranges button').forEach(x => x.classList.toggle('on', x === b));
+  R(+b.dataset.r);
+}));
+
+// Scroll reveal
+const io = new IntersectionObserver(es => es.forEach(e => {
+  if (!e.isIntersecting) return;
+  e.target.classList.add('in');
+  if (e.target.id === 'win' && !shown) { shown = true; R(0); }
+  io.unobserve(e.target);
+}), { threshold: 0.18 });
+document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+</script>
+</body>
+</html>

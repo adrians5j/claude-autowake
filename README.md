@@ -2,6 +2,8 @@
 
 Start your Claude Code 5-hour usage window early so it resets before you need it.
 
+Website (a parody, but the tool is real): https://adrians5j.github.io/claude-autowake/
+
 ## How It Works
 
 Claude Code's usage limit operates on a rolling 5-hour window. This tool sends a single small message to Haiku at scheduled times (>= 5h apart) to start each window. By 9am, you're already 3 hours into the first window — meaning it resets at 11am instead of 2pm.
