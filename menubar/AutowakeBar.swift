@@ -17,7 +17,10 @@ let pingPlistPath = "\(home)/Library/LaunchAgents/\(pingLabel).plist"
 let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
 
 let localStateInterval: TimeInterval = 30
-let usageInterval: TimeInterval = 300
+// The usage endpoint rate-limits hard (429 with a ~20 min Retry-After), so poll gently.
+let usageInterval: TimeInterval = 600
+let menuOpenRefreshInterval: TimeInterval = 180
+let staleAfter: TimeInterval = 900
 
 // MARK: - Shell helper
 
@@ -51,6 +54,7 @@ struct Usage {
 enum UsageError: Error {
     case noToken
     case http(Int)
+    case rateLimited(retryAfter: TimeInterval?)
     case network(String)
     case parse
 
@@ -58,7 +62,7 @@ enum UsageError: Error {
         switch self {
         case .noToken: return "No Claude Code login in Keychain"
         case .http(401): return "Token expired, run claude once to refresh"
-        case .http(429): return "Rate limited, will retry"
+        case .rateLimited: return "Usage API rate limited"
         case .http(let code): return "Usage API returned HTTP \(code)"
         case .network(let msg): return "Network error: \(msg)"
         case .parse: return "Could not parse usage response"
@@ -106,6 +110,11 @@ func fetchUsage(completion: @escaping (Result<Usage, UsageError>) -> Void) {
         URLSession.shared.dataTask(with: req) { data, resp, err in
             if let err = err { completion(.failure(.network(err.localizedDescription))); return }
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            if code == 429 {
+                let header = (resp as? HTTPURLResponse)?.value(forHTTPHeaderField: "Retry-After")
+                completion(.failure(.rateLimited(retryAfter: header.flatMap { TimeInterval($0.trimmingCharacters(in: .whitespaces)) })))
+                return
+            }
             guard code == 200 else { completion(.failure(.http(code))); return }
             guard let data = data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -728,6 +737,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var usage: Usage?
     var usageError: UsageError?
     var lastUsageAttempt = Date.distantPast
+    var rateLimitedUntil = Date.distantPast
+    var rateLimitBackoff: TimeInterval = 0
 
     let statsModel = StatsModel()
     var statsWindow: StatsWindow?
@@ -745,7 +756,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Timer.scheduledTimer(withTimeInterval: localStateInterval, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             self.refreshLocal()
-            if Date().timeIntervalSince(self.lastUsageAttempt) >= usageInterval { self.refreshUsage() }
+            self.refreshUsage(ifOlderThan: usageInterval)
         }
 
         // Keep the stats window live while it's open; only appended transcript bytes are read.
@@ -766,7 +777,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         refreshLocal()
         // Opening the menu is a good moment for fresh numbers, but don't hammer the API.
-        if Date().timeIntervalSince(lastUsageAttempt) >= 60 { refreshUsage() }
+        refreshUsage(ifOlderThan: menuOpenRefreshInterval)
     }
 
     func refreshLocal() {
@@ -779,17 +790,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    func refreshUsage() {
-        lastUsageAttempt = Date()
+    /// Fetches usage unless the server told us to back off or the last try was too recent.
+    func refreshUsage(ifOlderThan minAge: TimeInterval = 0) {
+        let now = Date()
+        guard now >= rateLimitedUntil, now.timeIntervalSince(lastUsageAttempt) >= minAge else { render(); return }
+        lastUsageAttempt = now
         fetchUsage { result in
             DispatchQueue.main.async {
                 switch result {
                 case .success(let u):
                     self.usage = u
                     self.usageError = nil
+                    self.rateLimitBackoff = 0
                     self.statsModel.setUsage(u)
                 case .failure(let e):
                     self.usageError = e
+                    if case .rateLimited(let retryAfter) = e {
+                        // Honor Retry-After; without one, back off 5, 10, 20... up to 60 minutes.
+                        self.rateLimitBackoff = min(3600, max(300, self.rateLimitBackoff * 2))
+                        self.rateLimitedUntil = Date().addingTimeInterval(max(60, retryAfter ?? self.rateLimitBackoff))
+                    }
                 }
                 self.render()
             }
@@ -801,6 +821,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func render() {
         renderButton()
         renderMenu()
+    }
+
+    var usageIsStale: Bool {
+        guard let u = usage else { return false }
+        return Date().timeIntervalSince(u.fetchedAt) > staleAfter
     }
 
     func activeFiveHour() -> UsageWindow? {
@@ -822,8 +847,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let text: String
         var color = NSColor.labelColor
         if let w = activeFiveHour(), let r = w.resetsAt {
-            text = " \(Int(w.utilization.rounded()))% · \(durationString(r.timeIntervalSinceNow))"
-            color = usageColor(w.utilization)
+            // A stale reading is marked with ~ and greyed so it doesn't pass for a live number.
+            text = " \(usageIsStale ? "~" : "")\(Int(w.utilization.rounded()))% · \(durationString(r.timeIntervalSinceNow))"
+            color = usageIsStale ? .secondaryLabelColor : usageColor(w.utilization)
         } else if usage != nil {
             text = " idle"
         } else {
@@ -898,14 +924,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let u = usage {
             usageItem("5-hour", u.fiveHour, idleText: "no active window").forEach(menu.addItem)
             usageItem("7-day", u.sevenDay, idleText: "no usage").forEach(menu.addItem)
-            let updated = info("Updated \(relative(u.fetchedAt))")
-            updated.indentationLevel = 1
+            let updated = usageIsStale
+                ? info("Last updated \(relative(u.fetchedAt)), numbers may be out of date",
+                       symbol: "clock.badge.exclamationmark", color: .systemOrange)
+                : info("Updated \(relative(u.fetchedAt))")
+            if !usageIsStale { updated.indentationLevel = 1 }
             menu.addItem(updated)
         } else if usageError == nil {
             menu.addItem(info("Loading…"))
         }
         if let e = usageError {
-            menu.addItem(info(e.message, symbol: "exclamationmark.triangle", color: .systemOrange))
+            var msg = e.message
+            if case .rateLimited = e, rateLimitedUntil > Date() {
+                msg += ", retrying at \(timeString(rateLimitedUntil))"
+            }
+            menu.addItem(info(msg, symbol: "exclamationmark.triangle", color: .systemOrange))
         }
 
         menu.addItem(.separator())
